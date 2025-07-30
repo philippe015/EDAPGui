@@ -1,7 +1,6 @@
 from numpy import array, sum
 import cv2
 
-
 """
 File:Screen_Regions.py    
 
@@ -9,78 +8,29 @@ Description:
   Class to rectangle areas of the screen to capture along with filters to apply. Includes functions to
   match a image template to the region using opencv 
 
-Author: sumzer0@yahoo.com
 """
 
-
 def reg_scale_for_station(region, w: int, h: int) -> [int, int, int, int]:
-    """ Scale a station services region based on the target resolution.
-    This is performed because the tables on the station services screen do
-    not increase proportionally with the screen size. The width changes with
-    the screen size, the height does not change based on the screen size
-    height, but on the screen width and the position stays consistent to the
-    center of the screen.
-    To calculate the new region height, we take the initial region defined at
-    1920x1080 and scale up the height based on the target width and apply the
-    new proportion against the center line.
-    @param h: The screen height in pixels
-    @param w: The screen width in pixels
-    @param region: The region at 1920x1080
-    @return: The new region in %
-    """
     ref_w = 1920
     ref_h = 1080
-
-    # Calc the x and y scaling.
     x_scale = w / ref_w
     y_scale = h / ref_h
-
-    # Determine centre of the region
     reg_avg = 0.5
-    # This alternate method below is based on the centre of the region instead of the centre of screen.
-    # This will generally NOT work for station screens that are obviously centred vertically.
-    # reg_avg = (region['rect'][1] + region['rect'][3]) / 2
-
-    # Recalc the region as a % above and below the center line.
     pct_abv = (reg_avg - region['rect'][1]) * x_scale / y_scale
     pct_blw = (region['rect'][3] - reg_avg) * x_scale / y_scale
-
-    # Apply new % to the center line.
     new_rect1 = reg_avg - pct_abv
     new_rect3 = reg_avg + pct_blw
-
-    # Return the update top and bottom Y percentages with the original X percentages.
     new_reg = {'rect': [region['rect'][0], new_rect1, region['rect'][2], new_rect3]}
     return new_reg
 
 
 def size_scale_for_station(width: int, height: int, w: int, h: int) -> (int, int):
-    """ Scale an item in the station services region based on the target resolution.
-    This is performed because the tables on the station services screen do
-    not increase proportionally with the screen size. The width changes with
-    the screen size, the height does not change based on the screen size
-    height, but on the screen width and the position stays consistent to the
-    center of the screen.
-    To calculate the new region height, we take the initial region defined at
-    1920x1080 and scale up the height based on the target width and apply the
-    new proportion against the center line.
-    @param width: The width of the item in pixels
-    @param height: The height of the item in pixels
-    @param h: The screen height in pixels
-    @param w: The screen width in pixels
-    """
     ref_w = 1920
     ref_h = 1080
-
-    # Calc the x and y scaling.
     x_scale = w / ref_w
     y_scale = h / ref_h
-
-    # Increase the height by the ratio of the width
     new_width = width * x_scale
     new_height = height * x_scale
-
-    # Return the new height in pixels.
     return new_width, new_height
 
 
@@ -108,9 +58,9 @@ class Screen_Regions:
         self.reg = {}
         # regions with associated filter and color ranges
         # The rect is [L, T, R, B] top left x, y, and bottom right x, y in fraction of screen resolution
-        self.reg['compass']   = {'rect': [0.33, 0.65, 0.46, 1.0], 'width': 1, 'height': 1, 'filterCB': self.equalize,                                'filter': None}
-        self.reg['target']    = {'rect': [0.33, 0.27, 0.66, 0.70], 'width': 1, 'height': 1, 'filterCB': self.filter_by_color, 'filter': self.orange_2_color_range}   # also called destination
-        self.reg['target_occluded']    = {'rect': [0.33, 0.27, 0.66, 0.70], 'width': 1, 'height': 1, 'filterCB': self.filter_by_color, 'filter': self.target_occluded_range} 
+        self.reg['compass']   = {'rect': [0.33, 0.65, 0.46, 1.0], 'width': 1, 'height': 1, 'filterCB': self.equalize, 'filter': None}
+        self.reg['target']    = {'rect': [0.33, 0.27, 0.66, 0.70], 'width': 1, 'height': 1, 'filterCB': self.filter_by_color, 'filter': self.orange_2_color_range}
+        self.reg['target_occluded'] = {'rect': [0.33, 0.27, 0.66, 0.70], 'width': 1, 'height': 1, 'filterCB': self.filter_by_color, 'filter': self.target_occluded_range} 
         self.reg['sun']       = {'rect': [0.30, 0.30, 0.70, 0.68], 'width': 1, 'height': 1, 'filterCB': self.filter_sun, 'filter': None}
         self.reg['disengage'] = {'rect': [0.42, 0.65, 0.60, 0.80], 'width': 1, 'height': 1, 'filterCB': self.filter_by_color, 'filter': self.blue_sco_color_range}
         self.reg['sco']       = {'rect': [0.42, 0.65, 0.60, 0.80], 'width': 1, 'height': 1, 'filterCB': self.filter_by_color, 'filter': self.blue_sco_color_range}
@@ -137,16 +87,51 @@ class Screen_Regions:
         Returns the filtered image. """
         scr = screen.get_screen_region(self.reg[region_name]['rect'], inv_col)
         if self.reg[region_name]['filterCB'] == None:
-            # return the screen region untouched in BGRA format.
             return scr
         else:
-            # return the screen region in the format returned by the filter.
             return self.reg[region_name]['filterCB'] (scr, self.reg[region_name]['filter'])          
+
+    def match_features_in_region(self, region_name, templ_name, min_good_matches=10, inv_col=True):
+        """
+        Tente de trouver un template dans une région en utilisant la détection de caractéristiques ORB.
+        C'est plus robuste que le template matching classique.
+
+        Args:
+            region_name (str): Le nom de la région d'écran où chercher.
+            templ_name (str): Le nom du template à trouver.
+            min_good_matches (int): Le nombre minimum de correspondances de caractéristiques
+                                    pour considérer la détection comme un succès.
+
+        Returns:
+            (int, list): Le nombre de bonnes correspondances trouvées et la liste des objets Match.
+        """
+        img_region = self.capture_region_filtered(self.screen, region_name, inv_col)
+        template_img = self.templates.template[templ_name]['image']
+        
+        if len(template_img.shape) > 2:
+            template_img = cv2.cvtColor(template_img, cv2.COLOR_BGR2GRAY)
+
+        orb = cv2.ORB_create(nfeatures=1000)
+
+        kp1, des1 = orb.detectAndCompute(template_img, None)
+        kp2, des2 = orb.detectAndCompute(img_region, None)
+
+        if des1 is None or des2 is None:
+            return 0, []
+
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        matches = bf.match(des1, des2)
+        
+        matches = sorted(matches, key=lambda x: x.distance)
+        
+        num_matches = len(matches)
+
+        return num_matches, matches
 
     def match_template_in_region(self, region_name, templ_name, inv_col=True):
         """ Attempt to match the given template in the given region which is filtered using the region filter.
         Returns the filtered image, detail of match and the match mask. """
-        img_region = self.capture_region_filtered(self.screen, region_name, inv_col)    # which would call, reg.capture_region('compass') and apply defined filter
+        img_region = self.capture_region_filtered(self.screen, region_name, inv_col)
         match = cv2.matchTemplate(img_region, self.templates.template[templ_name]['image'], cv2.TM_CCOEFF_NORMED)
         (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(match)
         return img_region, (minVal, maxVal, minLoc, maxLoc), match 
@@ -158,55 +143,35 @@ class Screen_Regions:
         (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(match)
         return image, (minVal, maxVal, minLoc, maxLoc), match     
     
-
     def equalize(self, image=None, noOp=None):
-        # Load the image in greyscale
         img_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        # create a CLAHE object (Arguments are optional).  Histogram equalization, improves constrast
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
         img_out = clahe.apply(img_gray)
-
         return img_out
         
     def filter_by_color(self, image, color_range):
-        """Filters an image based on a given color range.
-        Returns the filtered image. Pixels within the color range are returned
-        their original color, otherwise black."""
-        # converting from BGR to HSV color space
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        # filter passed in color low, high
         filtered = cv2.inRange(hsv, color_range[0], color_range[1])
-
         return filtered
  
-    # not used
     def filter_bright(self, image=None, noOp=None):
         equalized = self.equalize(image)
-        equalized = cv2.cvtColor(equalized, cv2.COLOR_GRAY2BGR)    #hhhmm, equalize() already converts to gray
+        equalized = cv2.cvtColor(equalized, cv2.COLOR_GRAY2BGR)
         equalized = cv2.cvtColor(equalized, cv2.COLOR_BGR2HSV)
-        filtered  = cv2.inRange(equalized, array([0, 0, 215]), array([0, 0, 255]))  #only high value
-
+        filtered  = cv2.inRange(equalized, array([0, 0, 215]), array([0, 0, 255]))
         return filtered
     
     def set_sun_threshold(self, thresh):
         self.sun_threshold = thresh
 
-    # need to compare filter_sun with filter_bright
     def filter_sun(self, image=None, noOp=None):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # set low end of filter to 25 to pick up the dull red Class L stars
         (thresh, blackAndWhiteImage) = cv2.threshold(hsv, self.sun_threshold, 255, cv2.THRESH_BINARY)
-
         return blackAndWhiteImage
 
-    # percent the image is white
     def sun_percent(self, screen):
         blackAndWhiteImage = self.capture_region_filtered(screen, 'sun')
- 
         wht = sum(blackAndWhiteImage == 255)     
         blk = sum(blackAndWhiteImage != 255)
-
         result = int((wht / (wht+blk))*100)
-
         return result
