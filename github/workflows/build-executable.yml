@@ -1,0 +1,69 @@
+name: Build Cross-Platform Executables for EDAPGui
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-python-${{ matrix.python-version }}-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-python-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Assurez-vous que pyinstaller est dans votre requirements.txt
+          pip install -r requirements.txt
+
+      # ÉTAPE MODIFIÉE : Utilise le fichier .spec pour une construction fiable
+      - name: Build executable with .spec file
+        run: pyinstaller --noconfirm EDAP-GUI.spec
+
+      # ÉTAPE MODIFIÉE : Empaquete le dossier de sortie complet
+      - name: Package application directory
+        shell: bash
+        run: |
+          # Le nom du dossier de sortie est défini dans le .spec (probablement "EDAP-GUI")
+          # Il faut vérifier ce nom dans le fichier .spec si le build échoue ici.
+          OUTPUT_DIR_NAME="EDAP-GUI"
+          ARTIFACT_FILENAME="EDAPGui-v${{ github.event.release.tag_name }}-${{ runner.os }}.zip"
+          
+          echo "Packaging directory: ./dist/$OUTPUT_DIR_NAME"
+          
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            # Sur Windows, on compresse le dossier complet
+            7z a $ARTIFACT_FILENAME ./dist/$OUTPUT_DIR_NAME/
+          else
+            # Sur Linux/macOS, on se place dans le dossier dist pour créer le zip
+            (cd ./dist && zip -r ../$ARTIFACT_FILENAME ./$OUTPUT_DIR_NAME)
+          fi
+          
+          # Stocke le nom du fichier pour l'étape de publication
+          echo "ASSET_PATH=${ARTIFACT_FILENAME}" >> $GITHUB_ENV
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET_PATH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
