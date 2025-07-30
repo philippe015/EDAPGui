@@ -1,86 +1,95 @@
-from os.path import isfile
-
-from EDlogger import logger
+from __future__ import annotations
+from pathlib import Path
 import xmltodict
-from os import environ
+from EDlogger import logger
 
+class GraphicsSettingsError(Exception):
+    """Exception personnalisée pour les erreurs liées aux paramètres graphiques."""
+    pass
 
 class EDGraphicsSettings:
-    """ Handles the Graphics DisplaySettings.xml and Settings.xml files. """
+    """ Gère les fichiers de configuration graphique d'Elite Dangerous. """
 
-    def __init__(self, display_file_path=None, settings_file_path=None):
-        self.fullscreen = ''
-        self.fullscreen_str = ''
-        self.screenwidth = ''
-        self.screenheight = ''
-        self.monitor = ''
-        self.fov = ''
-        self.display_settings_filepath = display_file_path if display_file_path else \
-            (environ[
-                 'LOCALAPPDATA'] + "\\Frontier Developments\\Elite Dangerous\\Options\\Graphics\\DisplaySettings.xml")
-        self.settings_filepath = settings_file_path if settings_file_path else \
-            (environ['LOCALAPPDATA'] + "\\Frontier Developments\\Elite Dangerous\\Options\\Graphics\\Settings.xml")
+    def __init__(self, display_file_path: str | None = None, settings_file_path: str | None = None):
+        # Utilisation de pathlib pour une gestion propre des chemins
+        local_app_data = Path.home() / "AppData" / "Local"
+        graphics_path = local_app_data / "Frontier Developments" / "Elite Dangerous" / "Options" / "Graphics"
 
-        if not isfile(self.display_settings_filepath):
-            logger.error(
-                f"Elite Dangerous graphics display settings file does not exist: {self.display_settings_filepath}.")
-            raise Exception(
-                f"Elite Dangerous graphics display settings file does not exist: {self.display_settings_filepath}.")
+        self.display_settings_filepath = Path(display_file_path) if display_file_path else graphics_path / "DisplaySettings.xml"
+        self.settings_filepath = Path(settings_file_path) if settings_file_path else graphics_path / "Settings.xml"
 
-        if not isfile(self.settings_filepath):
-            logger.error(f"Elite Dangerous settings file does not exist: {self.settings_filepath}.")
-            raise Exception(f"Elite Dangerous settings file does not exist: {self.settings_filepath}.")
+        # Initialisation des attributs
+        self.screen_width: int = 0
+        self.screen_height: int = 0
+        self.fullscreen_mode: str = ""
+        self.monitor_index: int = 0
+        self.fov: float = 0.0
 
-        # Read graphics display settings xml file data
-        logger.info(f"Reading ED graphics display settings from '{self.display_settings_filepath}'.")
-        self.display_settings = self.read_settings(self.display_settings_filepath)
+        # Lancement de la lecture et de l'analyse
+        self._load_and_parse_settings()
 
-        # Read graphics display settings xml file data
-        logger.info(f"Reading ED graphics settings from '{self.settings_filepath}'.")
-        self.settings = self.read_settings(self.settings_filepath)
-
-        # Process graphics display settings
-        if self.display_settings is not None:
-            self.screenwidth = self.display_settings['DisplayConfig']['ScreenWidth']
-            logger.debug(f"Elite Dangerous Display Config 'ScreenWidth': {self.screenwidth}.")
-
-            self.screenheight = self.display_settings['DisplayConfig']['ScreenHeight']
-            logger.debug(f"Elite Dangerous Display Config 'ScreenHeight': {self.screenheight}.")
-
-            self.fullscreen = self.display_settings['DisplayConfig'][
-                'FullScreen']  # 0=Windowed, 1=Fullscreen, 2=Borderless
-            options = ["Windowed", "Fullscreen", "Borderless"]
-            self.fullscreen_str = options[int(self.fullscreen)]
-            logger.debug(f"Elite Dangerous Display Config 'Fullscreen': {self.fullscreen_str}.")
-
-            self.monitor = self.display_settings['DisplayConfig']['Monitor']
-            logger.debug(f"Elite Dangerous Display Config 'Monitor': {self.monitor}.")
-
-        if not self.fullscreen_str.upper() == "Borderless".upper():
-            logger.error("Elite Dangerous is not set to BORDERLESS in graphics display settings.")
-            raise Exception('Elite Dangerous is not set to BORDERLESS in graphics display settings.')
-
-        # Process graphics settings
-        if self.settings is not None:
-            self.fov = self.settings['GraphicsOptions']['FOV']
-            logger.debug(f"Elite Dangerous Graphics Options 'FOV': {self.fov}.")
-
-    @staticmethod
-    def read_settings(filename) -> dict:
-        """ Reads an XML settings file to a Dict and returns the dict. """
+    def _read_xml_file(self, filepath: Path) -> dict:
+        """ Lit un fichier XML et le convertit en dictionnaire. """
+        if not filepath.is_file():
+            logger.error(f"Le fichier de configuration est introuvable : {filepath}")
+            raise GraphicsSettingsError(f"Fichier de configuration introuvable : {filepath}")
+        
         try:
-            with open(filename, 'r') as file:
-                my_xml = file.read()
-                my_dict = xmltodict.parse(my_xml)
-                return my_dict
-        except OSError as e:
-            logger.error(f"OS Error reading Elite Dangerous display settings file: {filename}.")
-            raise Exception(f"OS Error reading Elite Dangerous display settings file: {filename}.")
+            with open(filepath, 'r', encoding='utf-8') as file:
+                return xmltodict.parse(file.read())
+        except (OSError, xmltodict.expat.ExpatError) as e:
+            logger.error(f"Erreur lors de la lecture ou de l'analyse du fichier XML {filepath}: {e}")
+            raise GraphicsSettingsError(f"Impossible de lire ou d'analyser le fichier {filepath}") from e
 
+    def _load_and_parse_settings(self):
+        """ Orchestre la lecture et l'analyse des fichiers de configuration. """
+        logger.info(f"Lecture des paramètres d'affichage depuis '{self.display_settings_filepath}'.")
+        display_data = self._read_xml_file(self.display_settings_filepath)
+        self._parse_display_settings(display_data)
+
+        logger.info(f"Lecture des paramètres graphiques depuis '{self.settings_filepath}'.")
+        settings_data = self._read_xml_file(self.settings_filepath)
+        self._parse_graphics_options(settings_data)
+
+        # Validation finale
+        if self.fullscreen_mode.upper() != "BORDERLESS":
+            logger.error("Le mode d'affichage d'Elite Dangerous n'est pas configuré sur BORDERLESS.")
+            raise GraphicsSettingsError("Le mode d'affichage doit être BORDERLESS.")
+
+    def _parse_display_settings(self, data: dict):
+        """ Analyse les données de DisplaySettings.xml et peuple les attributs. """
+        config = data.get('DisplayConfig', {})
+        
+        try:
+            self.screen_width = int(config.get('ScreenWidth', 0))
+            self.screen_height = int(config.get('ScreenHeight', 0))
+            self.monitor_index = int(config.get('Monitor', 0))
+            
+            fullscreen_code = int(config.get('FullScreen', 0))
+            options = {0: "Windowed", 1: "Fullscreen", 2: "Borderless"}
+            self.fullscreen_mode = options.get(fullscreen_code, "Unknown")
+
+            logger.debug(f"Résolution détectée : {self.screen_width}x{self.screen_height}")
+            logger.debug(f"Mode d'affichage : {self.fullscreen_mode}")
+
+        except (ValueError, TypeError) as e:
+            raise GraphicsSettingsError("Données de configuration d'affichage invalides ou corrompues.") from e
+
+    def _parse_graphics_options(self, data: dict):
+        """ Analyse les données de Settings.xml pour le FOV. """
+        config = data.get('GraphicsOptions', {})
+        try:
+            self.fov = float(config.get('FOV', 70.0))
+            logger.debug(f"Champ de vision (FOV) : {self.fov}")
+        except (ValueError, TypeError) as e:
+            raise GraphicsSettingsError("Données de FOV invalides ou corrompues.") from e
 
 def main():
-    gs = EDGraphicsSettings()
-
+    try:
+        gs = EDGraphicsSettings()
+        print(f"Paramètres chargés avec succès : {gs.screen_width}x{gs.screen_height}, Mode={gs.fullscreen_mode}, FOV={gs.fov}")
+    except GraphicsSettingsError as e:
+        print(f"Erreur : {e}")
 
 if __name__ == "__main__":
     main()
