@@ -1,92 +1,73 @@
-import os
 import json
-
+from pathlib import Path
 
 class LocalizationManager:
-    """Class managing localization.
-
-    Access to the localization data is done through the [] operator (e.g. localization["key"]).
-
-    Attributes:
-        folder_path (str): Path to the folder containing the localization files.
-        available_languages (list[str]): List of available languages. Loaded when calling load().
-        language (str): Current language.
+    """
+    Gère le chargement et l'accès aux fichiers de localisation pour différentes langues.
     """
 
     def __init__(self, folder_path: str, language: str) -> None:
-        self.folder_path = folder_path
-        self.available_languages = []
+        self.folder_path = Path(folder_path)
+        if not self.folder_path.is_dir():
+            raise FileNotFoundError(f"Dossier de localisation introuvable : {self.folder_path}")
+
+        self.available_languages: list[str] = []
         self.language = language
+        self._data: dict[str, str] = {}
 
-        self._data = {}  # Parsed localization file
-
-        # Load available languages
         self._load_available_languages()
-        # Check if the localization files are bijective
         self._check_bijectivity()
-        # Load the localization file. Raises an exception if the language is not available.
         self.change_language(self.language)
 
     def _load_available_languages(self) -> None:
-        """Find all available languages in the specified directory"""
-        for file in os.listdir(self.folder_path):
-            if file.endswith(".json"):
-                self.available_languages.append(file[:-5])
+        """Trouve toutes les langues disponibles dans le dossier spécifié."""
+        self.available_languages = [p.stem for p in self.folder_path.glob("*.json")]
 
     def _check_bijectivity(self) -> None:
-        """Check if the localization data is bijective.
-
-        All json files should have the same keys. If not, an exception is raised.
         """
-        keys = []
+        Vérifie si tous les fichiers de localisation ont le même jeu de clés.
+        Cette version est optimisée pour la performance et fournit des erreurs détaillées.
+        """
+        if not self.available_languages:
+            return
 
-        # Add a list of all keys to a list
-        for language in self.available_languages:
-            with open(f"{self.folder_path}/{language}.json", "r", encoding='utf-8') as file:
-                data = json.load(file)
-                keys.append(list(data.keys()))
+        try:
+            # Utilise les clés du premier fichier comme référence.
+            with open(self.folder_path / f"{self.available_languages[0]}.json", "r", encoding='utf-8') as f:
+                reference_keys = set(json.load(f).keys())
 
-        # Compare the keys of the first language with the others
-        for i in range(1, len(keys)):
-            if keys[i] != keys[i - 1]:
-                raise Exception("The localization files have different keys. Make sure they are all the same.")
+            # Compare chaque fichier suivant à la référence.
+            for lang in self.available_languages[1:]:
+                with open(self.folder_path / f"{lang}.json", "r", encoding='utf-8') as f:
+                    current_keys = set(json.load(f).keys())
+                if current_keys != reference_keys:
+                    # Identifie les différences pour un message d'erreur plus utile.
+                    diff = reference_keys.symmetric_difference(current_keys)
+                    raise ValueError(f"Incohérence des clés dans '{lang}.json'. Différence : {diff}")
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            raise IOError(f"Échec de la vérification de la cohérence : {e}")
 
     def __getitem__(self, key: str) -> str:
-        """Get the localized string for the specified key.
-
-        Args:
-            key (str): Key to the localized string.
-
-        Returns:
-            str: The localized string from the json file.
         """
-        return self._data[key]
+        Récupère la chaîne de caractères localisée pour une clé.
+        Si non trouvée, retourne la clé elle-même pour faciliter le débogage.
+        """
+        return self._data.get(key, key)
 
     def refresh(self) -> None:
-        """Load localization files from specified folder.
-
-        This is useful if the localization files have been updated on runtime.
-
-        Called when updating the language.
-        """
-
-        # Load the localization file
-        self._data = {}
-        with open(f"{self.folder_path}/{self.language}.json", "r", encoding='utf-8') as file:
-            self._data = json.load(file)
+        """Recharge le fichier de localisation pour la langue actuelle."""
+        file_path = self.folder_path / f"{self.language}.json"
+        try:
+            with open(file_path, "r", encoding='utf-8') as f:
+                self._data = json.load(f)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Le fichier de langue est introuvable : {file_path}")
+        except json.JSONDecodeError:
+            raise ValueError(f"Erreur de décodage JSON dans le fichier : {file_path}")
 
     def change_language(self, language: str) -> None:
-        """Update the data for specified language.
-
-        Args:
-            language (str): Language to load. Should be the name of the file without the extension. (e.g. "en_EN" for the file "en_EN.json")
-        """
-
-        # Check if the language is available
-        if not language in self.available_languages:
-            raise Exception(
-                f"Language not found in {self.folder_path}. Is there a {self.folder_path}/{language}.json file?")
-
-        # Update the language
+        """Change la langue actuelle et recharge les données."""
+        if language not in self.available_languages:
+            raise ValueError(f"La langue '{language}' n'est pas disponible. Langues trouvées : {self.available_languages}")
         self.language = language
         self.refresh()
