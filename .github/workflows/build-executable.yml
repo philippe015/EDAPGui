@@ -1,6 +1,9 @@
 name: Build Executable
 
+# MODIFIÉ : Ajout du déclencheur pour les releases
 on:
+  release:
+    types: [created]
   push:
     branches: [ main ]
   pull_request:
@@ -9,7 +12,7 @@ on:
 
 jobs:
   build:
-    if: false
+    # MODIFIÉ : La condition "if: false" a été retirée pour activer le workflow
     runs-on: windows-latest
 
     steps:
@@ -25,7 +28,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         
-    # Custom PyInstaller installation with bootloader recompilation
     - name: Install custom PyInstaller
       run: |
         $Env:CL = "/Od"
@@ -33,7 +35,6 @@ jobs:
         python -m pip install --force-reinstall --ignore-installed --no-binary :all: --no-cache pyinstaller@git+https://github.com/pyinstaller/pyinstaller.git@0d562b5
         $Env:CL = ""
         
-    # Add version info file
     - name: Create Version Info
       run: |
         echo "VSVersionInfo(
@@ -64,33 +65,24 @@ jobs:
           ]
         )" > version_info.txt
         
-    - name: List directory contents for debugging
-      run: |
-        echo "Root directory:"
-        dir
-        echo "====================="
-        echo "Screen directory:"
-        dir screen
-        echo "====================="
-        echo "List all Python files:"
-        Get-ChildItem -Path . -Filter "*.py" -Recurse | Select-Object FullName
-        echo "====================="
-        echo "Recursive listing of all directories:"
-        Get-ChildItem -Path . -Directory -Recurse | Select-Object FullName
-
     - name: Build executable
+      id: build # Ajout d'un ID à l'étape pour réutiliser ses informations
       run: |
-        # Create a default config.json if it doesn't exist
-        if (-not (Test-Path -Path "config.json")) {
-          echo "{}" > config.json
+        # Créer le nom du fichier en se basant sur la date ou le tag de la release
+        if ("${{ github.event_name }}" -eq "release") {
+          $versionTag = "${{ github.event.release.tag_name }}"
+          $buildName = "EDAP-Autopilot-${versionTag}"
+        } else {
+          $buildDate = Get-Date -Format "yyyy-MM-dd"
+          $buildName = "EDAP-Autopilot-${buildDate}"
         }
+        echo "BUILD_NAME=$buildName" >> $env:GITHUB_ENV
+
+        # Créer les fichiers d'info
+        echo "Build from commit ${{ github.sha }}" > build_info.txt
+        if (-not (Test-Path -Path "config.json")) { echo "{}" > config.json }
         
-        # Create build info file with just the date
-        $buildDate = Get-Date -Format "yyyy-MM-dd"
-        echo "Build date: $buildDate" > build_info.txt
-        
-        # Run PyInstaller with options to reduce false positives
-        # Using --onedir instead of --onefile significantly reduces false positives
+        # Lancer PyInstaller
         pyinstaller --onedir --windowed --icon="screen\edap.ico" `
           --add-data "screen\edap.ico;screen" `
           --add-data "screen\*.png;screen" `
@@ -103,63 +95,34 @@ jobs:
           --hidden-import=PIL._imagingtk `
           --hidden-import=PIL._tkinter_finder `
           --version-file="version_info.txt" `
-          --name "EDAP-Autopilot-$buildDate" `
+          --name "$buildName" `
           --clean `
           --noupx `
           --noconfirm `
           EDAPGui.py
         
-        # Create zip archive of the directory for distribution
-        Compress-Archive -Path ".\dist\EDAP-Autopilot-$buildDate" -DestinationPath ".\dist\EDAP-Autopilot-$buildDate.zip"
+        # Créer l'archive zip
+        Compress-Archive -Path ".\dist\$buildName" -DestinationPath ".\dist\$buildName.zip"
         
-        # Check if build was successful
-        if (Test-Path ".\dist\EDAP-Autopilot-$buildDate.zip") {
-          echo "Build successful: EDAP-Autopilot-$buildDate.zip"
+        # Vérifier le succès
+        if (Test-Path ".\dist\$buildName.zip") {
+          echo "Build successful: $buildName.zip"
         } else {
-          echo "Build failed or file not found at expected location"
+          echo "Build failed"
           exit 1
         }
 
     - name: Check build with Windows Defender
       continue-on-error: true
       run: |
-        # Try to enable Windows Defender if possible
-        try {
-          Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction SilentlyContinue
-          Set-MpPreference -DisableBehaviorMonitoring $false -ErrorAction SilentlyContinue
-        } catch {
-          echo "::warning::Cannot configure Windows Defender settings"
-        }
-        
-        # Scan using direct command line tool
-        $buildDate = Get-Date -Format "yyyy-MM-dd"
-        $buildPath = Resolve-Path ".\dist\EDAP-Autopilot-$buildDate"
-        
+        $buildPath = Resolve-Path ".\dist\${{ env.BUILD_NAME }}"
         echo "Scanning path: $buildPath"
+        & "C:\Program Files\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File "$buildPath"
         
-        # Run the scan and capture output
-        $scanOutput = & "C:\Program Files\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File "$buildPath" 2>&1
-        
-        # Display the scan output
-        echo "Scan results:"
-        echo $scanOutput
-        
-        # Try to get threat detections (this may not work in GitHub Actions environment)
-        try {
-          $threats = Get-MpThreat -ErrorAction SilentlyContinue
-          if ($threats) {
-            echo "::warning::Windows Defender detected threats:"
-            $threats | Format-List
-          } else {
-            echo "No threats detected by Windows Defender."
-          }
-        } catch {
-          echo "Could not retrieve threat information."
-        }
-
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
+    # NOUVEAU : Publication de l'exécutable sur la page de la Release
+    # Cette étape ne s'exécute que si le workflow a été déclenché par une release
+    - name: Upload to Release
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v2
       with:
-        name: EDAP-Autopilot
-        path: ./dist/EDAP-Autopilot-*.zip
-        retention-days: 90
+        files: ./dist/${{ env.BUILD_NAME }}.zip
