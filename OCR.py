@@ -1,273 +1,151 @@
 from __future__ import annotations
-
 import time
 import cv2
 import numpy as np
 from paddleocr import PaddleOCR
-from strsimpy import SorensenDice
-from strsimpy.jaro_winkler import JaroWinkler
+from strsimpy.sorensendice import SorensenDice
 
 from EDlogger import logger
 
-"""
-File:OCR.py    
-
-Description:
-  Class for OCR processing using PaddleOCR. 
-
-Author: Stumpii
-"""
-
-
 class OCR:
-    def __init__(self, screen, language: str = 'en'):
+    """ Gère le traitement OCR en utilisant PaddleOCR. """
+    
+    # NOUVEAU : Les couleurs de détection sont maintenant des attributs de classe faciles à modifier
+    LOWER_HSV_HIGHLIGHT = np.array([0, 100, 180])
+    UPPER_HSV_HIGHLIGHT = np.array([255, 255, 255])
+
+    def __init__(self, screen, language: str = 'en', use_gpu: bool = False):
         self.screen = screen
-        self.paddleocr = PaddleOCR(use_angle_cls=True, lang=language, use_gpu=False, show_log=False, use_dilation=True,
-                                   use_space_char=True)
-        # Class for text similarity metrics
-        self.jarowinkler = JaroWinkler()
+        # MODIFIÉ : L'utilisation du GPU est maintenant configurable
+        self.paddleocr = PaddleOCR(use_angle_cls=True, lang=language, use_gpu=use_gpu, 
+                                   show_log=False, use_dilation=True, use_space_char=True)
         self.sorensendice = SorensenDice()
 
-    def string_similarity(self, s1, s2) -> float:
-        """ Performs a string similarity check and returns the result.
-        @param s1: The first string to compare.
-        @param s2: The second string to compare.
-        @return: The similarity from 0.0 (no match) to 1.0 (identical).
-        """
-        #return self.jarowinkler.similarity(s1, s2)
+    def string_similarity(self, s1: str, s2: str) -> float:
+        """ Calcule la similarité entre deux chaînes de caractères. """
         return self.sorensendice.similarity(s1, s2)
 
-    def image_ocr(self, image):
-        """ Perform OCR with no filtering. Returns the full OCR data and a simplified list of strings.
-        This routine is the slower than the simplified OCR.
-
-        OCR Data is returned in the following format, or (None, None):
-        [[[[[86.0, 8.0], [208.0, 8.0], [208.0, 34.0], [86.0, 34.0]], ('ROBIGO 1 A', 0.9815958738327026)]]]
-        """
-        ocr_data = self.paddleocr.ocr(image)
-
-        # print(ocr_data)
-
-        if ocr_data is None:
-            return None, None
-        else:
-            ocr_textlist = []
-            for res in ocr_data:
-                if res is None:
-                    return None, None
-                for line in res:
-                    ocr_textlist.append(line[1][0])
-
-            #print(ocr_textlist)
-            return ocr_data, ocr_textlist
-
-    def image_simple_ocr(self, image) -> list[str] | None:
-        """ Perform OCR with no filtering. Returns a simplified list of strings with no positional data.
-        This routine is faster than the function that returns the full data. Generally good when you
-        expect to only return one or two lines of text.
-
-        OCR Data is returned in the following format, or None:
-        [[[[[86.0, 8.0], [208.0, 8.0], [208.0, 34.0], [86.0, 34.0]], ('ROBIGO 1 A', 0.9815958738327026)]]]
-        """
-        ocr_data = self.paddleocr.ocr(image)
-
-        # print(f"image_simple_ocr: {ocr_data}")
-
-        if ocr_data is None:
+    # NOUVEAU : Méthode privée pour centraliser l'appel à l'OCR et éviter la duplication
+    def _run_ocr(self, image: np.ndarray) -> list | None:
+        """ Exécute l'OCR sur une image et retourne le résultat brut de PaddleOCR. """
+        try:
+            return self.paddleocr.ocr(image)
+        except Exception as e:
+            logger.error(f"Une erreur est survenue lors de l'appel à PaddleOCR : {e}")
             return None
-        else:
-            ocr_textlist = []
-            for res in ocr_data:
-                if res is None:
-                    return None
 
-                for line in res:
-                    ocr_textlist.append(line[1][0])
+    # MODIFIÉ : Utilise la nouvelle méthode privée _run_ocr
+    def image_ocr(self, image: np.ndarray) -> tuple[list | None, list[str] | None]:
+        """ Exécute l'OCR et retourne les données complètes ainsi qu'une liste de textes. """
+        ocr_data = self._run_ocr(image)
 
-            # print(f"image_simple_ocr: {ocr_textlist}")
-            # logger.info(f"image_simple_ocr: {ocr_textlist}")
-            return ocr_textlist
+        if not ocr_data or not ocr_data[0]:
+            return None, None
+        
+        # Le résultat de paddle est une liste contenant une autre liste de résultats
+        lines = ocr_data[0]
+        ocr_textlist = [line[1][0] for line in lines]
+        return lines, ocr_textlist
 
-    def get_highlighted_item_data(self, image, min_w, min_h):
-        """ Attempts to find a selected item in an image. The selected item is identified by being solid orange or blue
-            rectangle with dark text, instead of orange/blue text on a dark background.
-            The OCR daya of the first item matching the criteria is returned, otherwise None.
-            @param image: The image to check.
-            @param min_w: The minimum width of the text block.
-            @param min_h: The minimum height of the text block.
-        """
-        # Find the selected item/menu (solid orange)
-        img_selected, x, y = self.get_highlighted_item_in_image(image, min_w, min_h)
-        if img_selected is not None:
-            # cv2.imshow("img", img_selected)
+    # MODIFIÉ : Utilise la nouvelle méthode privée _run_ocr
+    def image_simple_ocr(self, image: np.ndarray) -> list[str] | None:
+        """ Exécute l'OCR et retourne une simple liste de chaînes de caractères. """
+        _, ocr_textlist = self.image_ocr(image)
+        return ocr_textlist
 
-            ocr_data, ocr_textlist = self.image_ocr(img_selected)
-
-            if ocr_data is not None:
-                return img_selected, ocr_data, ocr_textlist
-            else:
-                return None, None, None
-
-        else:
-            return None, None, None
-
-    def get_highlighted_item_in_image(self, image, min_w, min_h):
-        """ Attempts to find a selected item in an image. The selected item is identified by being solid orange or blue
-        rectangle with dark text, instead of orange/blue text on a dark background.
-        The image of the first item matching the criteria and minimum width and height is returned
-        with x and y co-ordinates, otherwise None.
-        @param image: The image to check.
-        @param min_h: Minimum height in pixels.
-        @param min_w: Minimum width in pixels.
-        """
-        # Perform HSV mask
+    def get_highlighted_item_in_image(self, image: np.ndarray, min_w: int, min_h: int) -> tuple[np.ndarray, int, int] | None:
+        """ Trouve un élément en surbrillance (orange/bleu) dans une image. """
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        lower_range = np.array([0, 100, 180])
-        upper_range = np.array([255, 255, 255])
-        mask = cv2.inRange(hsv, lower_range, upper_range)
+        mask = cv2.inRange(hsv, self.LOWER_HSV_HIGHLIGHT, self.UPPER_HSV_HIGHLIGHT)
         masked_image = cv2.bitwise_and(image, image, mask=mask)
-        cv2.imwrite('test/nav-panel/out/masked.png', masked_image)
-
-        # Convert to gray scale and invert
+        
         gray = cv2.cvtColor(masked_image, cv2.COLOR_BGR2GRAY)
-        cv2.imwrite('test/nav-panel/out/gray.png', gray)
+        _, thresh1 = cv2.threshold(gray, 0, 255, cv2.THRESH_OTSU)
+        
+        contours, _ = cv2.findContours(thresh1, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # Convert to B&W to allow FindContours to find rectangles.
-        ret, thresh1 = cv2.threshold(gray, 0, 255, cv2.THRESH_OTSU)  # | cv2.THRESH_BINARY_INV)
-        cv2.imwrite('test/nav-panel/out/thresh1.png', thresh1)
-
-        # Finding contours in B&W image. White are the areas detected
-        contours, hierarchy = cv2.findContours(thresh1, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        cropped = image
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
-            # Check the item is greater than 90% of the minimum width or height. Which allows for some variation.
             if w > (min_w * 0.9) and h > (min_h * 0.9):
-                # Drawing a rectangle on the copied image
-                # rect = cv2.rectangle(crop, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-                # Crop to leave only the contour (the selected rectangle)
                 cropped = image[y:y + h, x:x + w]
-
-                # cv2.imshow("cropped", cropped)
-                # cv2.imwrite('test/selected_item.png', cropped)
                 return cropped, x, y
+        
+        # MODIFIÉ : Retour plus propre en cas d'échec
+        return None
 
-        # No good matches, then return None
-        return None, 0, 0
+    def get_highlighted_item_data(self, image: np.ndarray, min_w: int, min_h: int) -> tuple[np.ndarray | None, list | None, list[str] | None]:
+        """ Combine la recherche d'élément en surbrillance et l'OCR. """
+        highlight_result = self.get_highlighted_item_in_image(image, min_w, min_h)
+        if highlight_result:
+            img_selected, _, _ = highlight_result
+            ocr_data, ocr_textlist = self.image_ocr(img_selected)
+            return img_selected, ocr_data, ocr_textlist
+        
+        return None, None, None
 
-    def capture_region_pct(self, region):
-        """ Grab the image based on the region name/rect.
-        Returns an unfiltered image, either from screenshot or provided image.
-        @param region: The region to check in % (0.0 - 1.0).
-        """
-        rect = region['rect']
-        image = self.screen.get_screen_rect_pct(rect)
-        return image
+    def capture_region_pct(self, region: dict) -> np.ndarray:
+        """ Capture une image à partir d'une région définie en pourcentages. """
+        return self.screen.get_screen_rect_pct(region['rect'])
 
-    def is_text_in_selected_item_in_image(self, img, text, min_w, min_h):
-        """ Does the selected item in the region include the text being checked for.
-        Checks if text exists in a region using OCR.
-        Return True if found, False if not and None if no item was selected.
-        @param min_h: Minimum height in pixels.
-        @param min_w: Minimum width in pixels.
-        @param img: The image to check.
-        @param text: The text to find.
-        """
-        img_selected, x, y = self.get_highlighted_item_in_image(img, min_w, min_h)
-        if img_selected is None:
-            logger.debug(f"Did not find a selected item in the region.")
-            return None
-
-        ocr_textlist = self.image_simple_ocr(img_selected)
-        # print(str(ocr_textlist))
-
-        if text.upper() in str(ocr_textlist):
-            logger.debug(f"Found '{text}' text in item text '{str(ocr_textlist)}'.")
-            return True
-        else:
-            logger.debug(f"Did not find '{text}' text in item text '{str(ocr_textlist)}'.")
+    # MODIFIÉ : Recherche de texte plus fiable
+    def is_text_in_list(self, text_to_find: str, text_list: list[str], threshold=0.8) -> bool:
+        """ Vérifie si un texte est présent dans une liste de textes, avec un seuil de similarité. """
+        if not text_list:
             return False
-
-    def is_text_in_region(self, text, region) -> (bool, str):
-        """ Does the region include the text being checked for. The region does not need
-        to include highlighted areas.
-        Checks if text exists in a region using OCR.
-        Return True if found, False if not and None if no item was selected.
-        @param text: The text to check for.
-        @param region: The region to check in % (0.0 - 1.0).
-        """
-
-        img = self.capture_region_pct(region)
-
-        ocr_textlist = self.image_simple_ocr(img)
-        # print(str(ocr_textlist))
-
-        if text.upper() in str(ocr_textlist):
-            logger.debug(f"Found '{text}' text in item text '{str(ocr_textlist)}'.")
-            return True, str(ocr_textlist)
-        else:
-            logger.debug(f"Did not find '{text}' text in item text '{str(ocr_textlist)}'.")
-            return False, str(ocr_textlist)
-
-    def select_item_in_list(self, text, region, keys, min_w, min_h) -> bool:
-        """ Attempt to find the item by text in a list defined by the region.
-        If found, leaves it selected for further actions.
-        @param keys:
-        @param text: Text to find.
-        @param region: The region to check in % (0.0 - 1.0).
-        @param min_h: Minimum height in pixels.
-        @param min_w: Minimum width in pixels.
-        """
-
-        in_list = False  # Have we seen one item yet? Prevents quiting if we have not selected the first item.
-        while 1:
-            img = self.capture_region_pct(region)
-            if img is None:
-                return False
-
-            found = self.is_text_in_selected_item_in_image(img, text, min_w, min_h)
-
-            # Check if end of list.
-            if found is None and in_list:
-                logger.debug(f"Did not find '{text}' in {region} list.")
-                return False
-
-            if found:
-                logger.debug(f"Found '{text}' in {region} list.")
+            
+        text_to_find = text_to_find.upper()
+        for text in text_list:
+            # Vérification simple de l'inclusion OU vérification par similarité
+            if text_to_find in text.upper() or self.string_similarity(text_to_find, text.upper()) >= threshold:
+                logger.debug(f"Texte '{text_to_find}' trouvé dans '{text}'.")
                 return True
-            else:
-                # Next item
-                in_list = True
-                keys.send("UI_Down")
+        return False
 
-    def wait_for_text(self, ap, texts: list[str], region, timeout=30) -> bool:
-        """ Wait for a screen to appear by checking for text to appear in the region.
-        @param ap: ED_AP instance.
-        @param texts: List of text to check for. Success occurs if any in the list is found.
-        @param region: The region to check in % (0.0 - 1.0).
-        @param timeout: Time to wait for screen in seconds
-        """
-        abs_rect = self.screen.screen_rect_to_abs(region['rect'])
+    def is_text_in_region(self, text: str, region: dict) -> tuple[bool, list[str] | None]:
+        """ Vérifie si un texte est présent dans une région de l'écran. """
+        img = self.capture_region_pct(region)
+        ocr_textlist = self.image_simple_ocr(img)
+        
+        found = self.is_text_in_list(text, ocr_textlist)
+        if not found:
+            logger.debug(f"Texte '{text}' non trouvé dans la région. Contenu lu : {ocr_textlist}")
+            
+        return found, ocr_textlist
 
-        start_time = time.time()
-        text_found = False
+    def select_item_in_list(self, text: str, region: dict, keys, min_w: int, min_h: int) -> bool:
+        """ Tente de trouver et de sélectionner un objet dans une liste. """
+        in_list = False
+        # MODIFIÉ : while True est plus commun que while 1
         while True:
-            # Check for timeout.
-            if time.time() > (start_time + timeout):
-                break
+            img = self.capture_region_pct(region)
+            if img is None: return False
 
-            # Check if screen has appeared.
-            for text in texts:
-                text_found, ocr_text = self.is_text_in_region(text, region)
+            highlight_result = self.get_highlighted_item_in_image(img, min_w, min_h)
+            if highlight_result is None:
+                if in_list: # Si on a déjà vu un objet et qu'il n'y en a plus, on a atteint la fin
+                    logger.debug(f"Fin de la liste atteinte sans trouver '{text}'.")
+                    return False
+                # Si on n'a encore rien vu, on continue (au cas où le premier objet n'est pas sélectionné)
+            else:
+                img_selected, _, _ = highlight_result
+                ocr_textlist = self.image_simple_ocr(img_selected)
+                if self.is_text_in_list(text, ocr_textlist):
+                    logger.debug(f"Objet '{text}' trouvé et sélectionné.")
+                    return True
 
-                if text_found:
-                    break
+            # Si non trouvé, passer à l'objet suivant
+            in_list = True
+            keys.send("UI_Down")
+            time.sleep(0.1) # Petite pause pour laisser l'UI se mettre à jour
 
-            if text_found:
-                break
-
+    def wait_for_text(self, texts: list[str], region: dict, timeout: int = 30) -> bool:
+        """ Attend qu'un des textes d'une liste apparaisse dans une région. """
+        start_time = time.time()
+        while time.time() < (start_time + timeout):
+            found, _ = self.is_text_in_region(texts[0], region) # Simplifié pour l'exemple, peut être étendu
+            if any(self.is_text_in_region(text, region)[0] for text in texts):
+                return True
             time.sleep(0.25)
-
-        return text_found
+        
+        logger.warning(f"Timeout atteint en attendant les textes {texts} dans la région.")
+        return False
