@@ -1,6 +1,5 @@
 name: Build Executable
 
-# MODIFIÉ : Ajout du déclencheur pour les releases
 on:
   release:
     types: [created]
@@ -12,7 +11,6 @@ on:
 
 jobs:
   build:
-    # MODIFIÉ : La condition "if: false" a été retirée pour activer le workflow
     runs-on: windows-latest
 
     steps:
@@ -22,6 +20,15 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
+        
+    # NOUVEAU : Mise en cache des dépendances pour accélérer les exécutions futures
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
         
     - name: Install dependencies
       run: |
@@ -66,9 +73,8 @@ jobs:
         )" > version_info.txt
         
     - name: Build executable
-      id: build # Ajout d'un ID à l'étape pour réutiliser ses informations
+      id: build
       run: |
-        # Créer le nom du fichier en se basant sur la date ou le tag de la release
         if ("${{ github.event_name }}" -eq "release") {
           $versionTag = "${{ github.event.release.tag_name }}"
           $buildName = "EDAP-Autopilot-${versionTag}"
@@ -77,12 +83,9 @@ jobs:
           $buildName = "EDAP-Autopilot-${buildDate}"
         }
         echo "BUILD_NAME=$buildName" >> $env:GITHUB_ENV
-
-        # Créer les fichiers d'info
         echo "Build from commit ${{ github.sha }}" > build_info.txt
         if (-not (Test-Path -Path "config.json")) { echo "{}" > config.json }
         
-        # Lancer PyInstaller
         pyinstaller --onedir --windowed --icon="screen\edap.ico" `
           --add-data "screen\edap.ico;screen" `
           --add-data "screen\*.png;screen" `
@@ -101,10 +104,8 @@ jobs:
           --noconfirm `
           EDAPGui.py
         
-        # Créer l'archive zip
         Compress-Archive -Path ".\dist\$buildName" -DestinationPath ".\dist\$buildName.zip"
         
-        # Vérifier le succès
         if (Test-Path ".\dist\$buildName.zip") {
           echo "Build successful: $buildName.zip"
         } else {
@@ -119,8 +120,132 @@ jobs:
         echo "Scanning path: $buildPath"
         & "C:\Program Files\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File "$buildPath"
         
-    # NOUVEAU : Publication de l'exécutable sur la page de la Release
-    # Cette étape ne s'exécute que si le workflow a été déclenché par une release
+    - name: Upload to Release
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ./dist/${{ env.BUILD_NAME }}.zipname: Build Executable
+
+on:
+  release:
+    types: [created]
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    # NOUVEAU : Mise en cache des dépendances pour accélérer les exécutions futures
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Install custom PyInstaller
+      run: |
+        $Env:CL = "/Od"
+        $Env:PYINSTALLER_COMPILE_BOOTLOADER = "true"
+        python -m pip install --force-reinstall --ignore-installed --no-binary :all: --no-cache pyinstaller@git+https://github.com/pyinstaller/pyinstaller.git@0d562b5
+        $Env:CL = ""
+        
+    - name: Create Version Info
+      run: |
+        echo "VSVersionInfo(
+          ffi=FixedFileInfo(
+            filevers=(1, 0, 0, 0),
+            prodvers=(1, 0, 0, 0),
+            mask=0x3f,
+            flags=0x0,
+            OS=0x40004,
+            fileType=0x1,
+            subtype=0x0,
+            date=(0, 0)
+          ),
+          kids=[
+            StringFileInfo([
+              StringTable(
+                u'040904B0',
+                [StringStruct(u'CompanyName', u'EDAP'),
+                 StringStruct(u'FileDescription', u'EDAP Autopilot'),
+                 StringStruct(u'FileVersion', u'1.0.0'),
+                 StringStruct(u'InternalName', u'EDAP_Autopilot'),
+                 StringStruct(u'LegalCopyright', u'Copyright (c) 2024'),
+                 StringStruct(u'OriginalFilename', u'EDAP-Autopilot.exe'),
+                 StringStruct(u'ProductName', u'EDAP Autopilot'),
+                 StringStruct(u'ProductVersion', u'1.0.0')])
+              ]),
+            VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+          ]
+        )" > version_info.txt
+        
+    - name: Build executable
+      id: build
+      run: |
+        if ("${{ github.event_name }}" -eq "release") {
+          $versionTag = "${{ github.event.release.tag_name }}"
+          $buildName = "EDAP-Autopilot-${versionTag}"
+        } else {
+          $buildDate = Get-Date -Format "yyyy-MM-dd"
+          $buildName = "EDAP-Autopilot-${buildDate}"
+        }
+        echo "BUILD_NAME=$buildName" >> $env:GITHUB_ENV
+        echo "Build from commit ${{ github.sha }}" > build_info.txt
+        if (-not (Test-Path -Path "config.json")) { echo "{}" > config.json }
+        
+        pyinstaller --onedir --windowed --icon="screen\edap.ico" `
+          --add-data "screen\edap.ico;screen" `
+          --add-data "screen\*.png;screen" `
+          --add-data "*.py;." `
+          --add-data "build_info.txt;." `
+          --add-data "config.json;." `
+          --collect-data "paddle" `
+          --collect-all "paddleocr" `
+          --hidden-import=PIL `
+          --hidden-import=PIL._imagingtk `
+          --hidden-import=PIL._tkinter_finder `
+          --version-file="version_info.txt" `
+          --name "$buildName" `
+          --clean `
+          --noupx `
+          --noconfirm `
+          EDAPGui.py
+        
+        Compress-Archive -Path ".\dist\$buildName" -DestinationPath ".\dist\$buildName.zip"
+        
+        if (Test-Path ".\dist\$buildName.zip") {
+          echo "Build successful: $buildName.zip"
+        } else {
+          echo "Build failed"
+          exit 1
+        }
+
+    - name: Check build with Windows Defender
+      continue-on-error: true
+      run: |
+        $buildPath = Resolve-Path ".\dist\${{ env.BUILD_NAME }}"
+        echo "Scanning path: $buildPath"
+        & "C:\Program Files\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File "$buildPath"
+        
     - name: Upload to Release
       if: github.event_name == 'release'
       uses: softprops/action-gh-release@v2
