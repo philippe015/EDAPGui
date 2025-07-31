@@ -1,374 +1,206 @@
+from __future__ import annotations
 import threading
-from ctypes.wintypes import PRECT
 from time import sleep
-
+from dataclasses import dataclass
 import win32api
 import win32con
 import win32gui
 import win32ui
 
-"""
-File:Overlay.py    
-
-Description:
-  Class to support drawing lines and text which would overlay the parent screen
-
-Author: sumzer0@yahoo.com
-
-to use:
-ov = Overlay("")
-# key = a string to be any identifier you want it to be
-ov.overlay_rect(key, (pt[0]+x_start, pt[1]+y_start), (pt[0] + compass_width+x_start, pt[1] + compass_height+y_start), (R,G,B), thinkness)
-
-ov.overlay_setfont("Times New Roman", 12 )
-ov.overlay_set_pos(2000, 50)
-#                                        row,col, color   based on fontSize
-ov.overlay_text('1', "Hello World",       1, 1,(0,0,255) )
-
-ov.overlay_paint()
-
-#@end
-ov.overlay_quit()
-"""
-
-lines = {}
-text = {}
-floating_text = {}
-fnt = ["Times New Roman", 12, 12]
-pos = [0,0]
-elite_dangerous_window = "Elite - Dangerous (CLIENT)"
-
+# Utilisation d'un dataclass pour une structure de données plus propre et plus moderne
+@dataclass
 class Vector:
-    def __init__(self, x, y, w, h):
-        self.x = x
-        self.y = y
-        self.w = w
-        self.h = h
-    def __ne__(self, other):
-        this = self.x + self.y + self.w + self.h
-        _other = other.x + other.y + other.w + other.h
-        return this != _other
+    x: int = 0
+    y: int = 0
+    w: int = 0
+    h: int = 0
 
 class Overlay:
-       
-    def __init__(self, parent_window, elite=0):
+    """
+    Crée une superposition (overlay) transparente pour dessiner des formes et du texte
+    sur une autre fenêtre ou sur l'écran entier.
+    """
+    def __init__(self, parent_window_title: str | None = None):
+        self.parent_title = parent_window_title
+        self.h_window = None
+        self.target_hwnd = None
+        self.target_rect = Vector()
 
-        self.parent = parent_window
-        if elite == 1:
-            self.parent = elite_dangerous_window
-        
-        self.hWindow = None
-        self.overlay_thr = threading.Thread(target=self.overlay_win32_run)
-        self.overlay_thr.setDaemon(False)
-        self.overlay_thr.start()
-        self.targetRect = Vector(0, 0, 1920, 1080)
-        self.tHwnd = None
+        # Attributs d'instance pour le dessin (remplace les variables globales)
+        self.lines = {}
+        self.texts = {}
+        self.floating_texts = {}
+        self.font = ("Times New Roman", 12)
+        self.text_pos = (0, 0)
 
-    def overlay_win32_run(self):
-        hInstance = win32api.GetModuleHandle()
-        className = 'OverlayClassName'
-        hWndParent = None
+        # Verrou pour la sécurité du threading
+        self.lock = threading.Lock()
 
-        if self.parent != "":
-            self.tHwnd= win32gui.FindWindow(None, self.parent)
-            if self.tHwnd:
-                rect = win32gui.GetWindowRect(self.tHwnd)
-                self.targetRect = Vector(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1])
+        # Démarrage du thread de l'interface graphique
+        self.overlay_thread = threading.Thread(target=self._run_win32_loop, daemon=True)
+        self.overlay_thread.start()
+        sleep(0.1) # Laisse le temps à la fenêtre d'être créée
 
-        wndClass                = win32gui.WNDCLASS()
+    def _run_win32_loop(self):
+        """ Boucle principale pour la fenêtre WinAPI, gère les messages Windows. """
+        h_instance = win32api.GetModuleHandle()
+        class_name = 'OverlayWindowClass'
 
-        wndClass.style          = win32con.CS_HREDRAW | win32con.CS_VREDRAW
-        wndClass.lpfnWndProc    = self.wndProc
-        wndClass.hInstance      = hInstance
-        wndClass.hCursor        = win32gui.LoadCursor(None, win32con.IDC_ARROW)
-        wndClass.hbrBackground  = win32gui.GetStockObject(win32con.WHITE_BRUSH)
-        wndClass.lpszClassName  = className
+        wnd_class = win32gui.WNDCLASS()
+        wnd_class.style = win32con.CS_HREDRAW | win32con.CS_VREDRAW
+        wnd_class.lpfnWndProc = self._wnd_proc # Méthode d'instance
+        wnd_class.hInstance = h_instance
+        wnd_class.hCursor = win32gui.LoadCursor(None, win32con.IDC_ARROW)
+        wnd_class.hbrBackground = win32gui.GetStockObject(win32con.WHITE_BRUSH)
+        wnd_class.lpszClassName = class_name
+        wnd_class_atom = win32gui.RegisterClass(wnd_class)
 
-        wndClassAtom = win32gui.RegisterClass(wndClass)
-
-        exStyle = win32con.WS_EX_COMPOSITED | win32con.WS_EX_LAYERED | win32con.WS_EX_NOACTIVATE | win32con.WS_EX_TOPMOST | win32con.WS_EX_TRANSPARENT
-
+        ex_style = (win32con.WS_EX_COMPOSITED | win32con.WS_EX_LAYERED | 
+                    win32con.WS_EX_NOACTIVATE | win32con.WS_EX_TOPMOST | win32con.WS_EX_TRANSPARENT)
         style = win32con.WS_DISABLED | win32con.WS_POPUP | win32con.WS_VISIBLE
 
-        self.hWindow = win32gui.CreateWindowEx(
-            exStyle,
-            wndClassAtom,
-            None, # WindowName
-            style,
-            0, # x
-            0, # y
-            win32api.GetSystemMetrics(win32con.SM_CXSCREEN), # width
-            win32api.GetSystemMetrics(win32con.SM_CYSCREEN), # height
-            hWndParent, # hWndParent
-            None, # hMenu
-            hInstance,
-            None # lpParam
+        self.h_window = win32gui.CreateWindowEx(
+            ex_style, wnd_class_atom, None, style,
+            0, 0, win32api.GetSystemMetrics(win32con.SM_CXSCREEN), win32api.GetSystemMetrics(win32con.SM_CYSCREEN),
+            None, None, h_instance, None
         )
 
-        win32gui.SetLayeredWindowAttributes(self.hWindow, 0x00ffffff, 255, win32con.LWA_COLORKEY | win32con.LWA_ALPHA)
-
-        win32gui.SetWindowPos(self.hWindow, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-            win32con.SWP_NOACTIVATE | win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
-
-        # If a parent was specified, and we found it move our window over that window
-        if self.tHwnd != None:
-            win32gui.MoveWindow(self.hWindow, self.targetRect.x, self.targetRect.y, self.targetRect.w, self.targetRect.h, True)
-
-
-        # Dispatch messages, this function needs to be its own task to run forever until Quit
+        win32gui.SetLayeredWindowAttributes(self.h_window, 0x00ffffff, 255, win32con.LWA_COLORKEY | win32con.LWA_ALPHA)
+        win32gui.SetWindowPos(self.h_window, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                              win32con.SWP_NOACTIVATE | win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
+        
+        # Initialiser la position de la fenêtre sur la fenêtre cible si elle est spécifiée
+        self._update_target_window()
         win32gui.PumpMessages()
 
-    def _GetTargetWindowRect(self):
-        rect = win32gui.GetWindowRect(self.tHwnd)
-        ret = Vector(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1])
-        return ret
+    def _update_target_window(self):
+        """ Met à jour la position de l'overlay pour qu'elle corresponde à la fenêtre cible. """
+        if self.parent_title:
+            self.target_hwnd = win32gui.FindWindow(None, self.parent_title)
+            if self.target_hwnd:
+                rect = win32gui.GetWindowRect(self.target_hwnd)
+                new_rect = Vector(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1])
+                if self.target_rect != new_rect:
+                    self.target_rect = new_rect
+                    win32gui.MoveWindow(self.h_window, self.target_rect.x, self.target_rect.y, self.target_rect.w, self.target_rect.h, True)
 
-    def overlay_rect(self, key, pt1, pt2, color, thick):
-        global lines
-        lines[key] = [pt1, pt2, color, thick]
-
-    def overlay_rect1(self, key, rect, color, thick):
-        global lines
-        lines[key] = [(rect[0], rect[1]), (rect[2], rect[3]), color, thick]
-
-    def overlay_setfont(self, fontname, fsize ):
-        global fnt
-        fnt = [fontname, fsize, fsize]
-
-    def overlay_set_pos(self, x, y):
-        global pos
-        pos = [x, y]
-
-    def overlay_text(self, key, txt, row, col, color):
-        global text
-        text[key] = [txt, row, col, color]
-
-    def overlay_floating_text(self, key, txt, x, y, color):
-        global floating_text
-        floating_text[key] = [txt, x, y, color]
-
-    def overlay_paint(self):
-        # if a parent was specified check to see if it moved, if so reposition our origin to new window location
-        if self.tHwnd:
-            if self.targetRect != self._GetTargetWindowRect():
-                rect = win32gui.GetWindowRect(self.tHwnd)
-                self.targetRect = Vector(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1])
-                win32gui.MoveWindow(self.hWindow, self.targetRect.x, self.targetRect.y, self.targetRect.w, self.targetRect.h, True)
-
-        win32gui.RedrawWindow(self.hWindow, None, None, win32con.RDW_INVALIDATE | win32con.RDW_ERASE) 
-
-    def overlay_clear(self):
-        lines.clear()
-        text.clear()
-        floating_text.clear()
-
-    def overlay_remove_rect(self, key):
-        if key in lines:
-            lines.pop(key)
-
-    def overlay_remove_text(self, key):
-        if key in text:
-            text.pop(key)
-
-    def overlay_remove_floating_text(self, key):
-        if key in floating_text:
-            floating_text.pop(key)
-
-    def overlay_quit(self):
-        win32gui.PostMessage(self.hWindow, win32con.WM_CLOSE, 0, 0)  
-
-    @staticmethod 
-    def overlay_draw_rect(hdc, pt1, pt2, line_type, color, thick):
-        wid = pt2[0] - pt1[0]
-        hgt = pt2[1] - pt1[1]
-
-        pin_thick = win32gui.CreatePen(line_type, thick, win32api.RGB(color[0], color[1], color[2]))
-        pin_thin  = win32gui.CreatePen(line_type, 1, win32api.RGB(color[0], color[1], color[2]))
-   
-        if wid < 20:
-            win32gui.SelectObject(hdc, pin_thin)
-            win32gui.Rectangle(hdc, pt1[0], pt1[1], pt2[0], pt2[1])
-        else:
-            len_wid = wid / 5
-            len_hgt = hgt / 5
-            half_wid = wid/ 2
-            half_hgt = hgt/ 2
-            tic_len = thick-1
-            # top
-            win32gui.SelectObject(hdc, pin_thick)
-            win32gui.MoveToEx(hdc, int(pt1[0]),             int(pt1[1]))
-            win32gui.LineTo  (hdc, int(pt1[0]+len_wid),     int(pt1[1]))
-
-            win32gui.SelectObject(hdc, pin_thin)
-            win32gui.MoveToEx(hdc, int(pt1[0]+(2*len_wid)), int(pt1[1]))
-            win32gui.LineTo  (hdc, int(pt1[0]+(3*len_wid)), int(pt1[1]))
-
-            win32gui.SelectObject(hdc, pin_thick)
-            win32gui.MoveToEx(hdc, int(pt1[0]+(4*len_wid)), int(pt1[1]))
-            win32gui.LineTo  (hdc, int(pt2[0]),             int(pt1[1]))
-
-            # top tic
-            win32gui.MoveToEx(hdc, int(pt1[0]+half_wid),    int(pt1[1]))
-            win32gui.LineTo  (hdc, int(pt1[0]+half_wid),    int(pt1[1])-tic_len)
-
-            # bot
-            win32gui.MoveToEx(hdc, int(pt1[0]),             int(pt2[1]))
-            win32gui.LineTo  (hdc, int(pt1[0]+len_wid),     int(pt2[1]))
-
-            win32gui.SelectObject(hdc, pin_thin)
-            win32gui.MoveToEx(hdc, int(pt1[0]+(2*len_wid)), int(pt2[1]))
-            win32gui.LineTo  (hdc, int(pt1[0]+(3*len_wid)), int(pt2[1]))
-
-            win32gui.SelectObject(hdc, pin_thick)
-            win32gui.MoveToEx(hdc, int(pt1[0]+(4*len_wid)), int(pt2[1]))
-            win32gui.LineTo  (hdc, int(pt2[0]),             int(pt2[1]))
-            # bot tic
-            win32gui.MoveToEx(hdc, int(pt1[0]+half_wid),    int(pt2[1]))
-            win32gui.LineTo  (hdc, int(pt1[0]+half_wid),    int(pt2[1])+tic_len)
-
-            # left
-            win32gui.MoveToEx(hdc, int(pt1[0]),  int(pt1[1]))
-            win32gui.LineTo  (hdc, int(pt1[0]),  int(pt1[1]+len_hgt))
-
-            win32gui.SelectObject(hdc, pin_thin)
-            win32gui.MoveToEx(hdc, int(pt1[0]),  int(pt1[1]+(2*len_hgt)))
-            win32gui.LineTo  (hdc, int(pt1[0]),  int(pt1[1]+(3*len_hgt)))
-
-            win32gui.SelectObject(hdc, pin_thick)
-            win32gui.MoveToEx(hdc, int(pt1[0]),  int(pt1[1]+(4*len_hgt)))
-            win32gui.LineTo  (hdc, int(pt1[0]),  int(pt2[1]))
-
-            # left tic
-            win32gui.MoveToEx(hdc, int(pt1[0]),          int(pt1[1]+half_hgt))
-            win32gui.LineTo  (hdc, int(pt1[0]-tic_len),  int(pt1[1]+half_hgt))
-
-            # right
-            win32gui.MoveToEx(hdc, int(pt2[0]),  int(pt1[1]))
-            win32gui.LineTo  (hdc, int(pt2[0]),  int(pt1[1]+len_hgt))
-
-            win32gui.SelectObject(hdc, pin_thin)
-            win32gui.MoveToEx(hdc, int(pt2[0]),  int(pt1[1]+(2*len_hgt)))
-            win32gui.LineTo  (hdc, int(pt2[0]),  int(pt1[1]+(3*len_hgt)))
-
-            win32gui.SelectObject(hdc, pin_thick)
-            win32gui.MoveToEx(hdc, int(pt2[0]),  int(pt1[1]+(4*len_hgt)))
-            win32gui.LineTo  (hdc, int(pt2[0]),  int(pt2[1]))
-            # right tic
-            win32gui.MoveToEx(hdc, int(pt2[0]),    int(pt1[1]+half_hgt))
-            win32gui.LineTo  (hdc, int(pt2[0]+tic_len),   int(pt1[1]+half_hgt))
-
-    @staticmethod 
-    def overlay_set_font(hdc, fontname, fontSize):
-        global fnt
-        dpiScale = win32ui.GetDeviceCaps(hdc, win32con.LOGPIXELSX) / 60.0
-
-        lf = win32gui.LOGFONT()
-        lf.lfFaceName = fontname
-        lf.lfHeight = int(round(dpiScale * fontSize))
-        #lf.lfWeight = 150
-        # Use nonantialiased to remove the white edges around the text.
-        lf.lfQuality = win32con.NONANTIALIASED_QUALITY
-        hf = win32gui.CreateFontIndirect(lf)
-        win32gui.SelectObject(hdc, hf)
-        fnt[2] = lf.lfHeight
-   
-
-    @staticmethod 
-    def overlay_draw_text(hWnd, hdc, txt, row, col, color):
-        global pos, fnt
-
-        x = pos[0]+col*fnt[1]
-        y = pos[1]+row*fnt[2]
-        rect = (x, y, 1, 1) 
-        win32gui.SetTextColor(hdc,win32api.RGB(color[0], color[1], color[2]))    
-
-        win32gui.DrawText(hdc,  txt,  -1,  rect,   win32con.DT_LEFT | win32con.DT_NOCLIP | win32con.DT_SINGLELINE | win32con.DT_TOP   )
-
-
-    @staticmethod
-    def overlay_draw_floating_text(hWnd, hdc, txt, x, y, color):
-        rect = (x, y, 1, 1)
-        win32gui.SetTextColor(hdc,win32api.RGB(color[0], color[1], color[2]))
-
-        win32gui.DrawText(hdc,  txt,  -1,  rect,   win32con.DT_LEFT | win32con.DT_NOCLIP | win32con.DT_SINGLELINE | win32con.DT_TOP   )
-
-
-    @staticmethod 
-    def wndProc(hWnd, message, wParam, lParam):
-        global lines, text
+    def _wnd_proc(self, hWnd, message, wParam, lParam):
+        """ Procédure de fenêtre, maintenant une méthode d'instance. """
         if message == win32con.WM_PAINT:
-            hdc, paintStruct = win32gui.BeginPaint(hWnd)
-
-            Overlay.overlay_set_font(hdc, fnt[0], fnt[1])
-
-            for i, key in enumerate(lines):
-                #print(lines[key])
-                Overlay.overlay_draw_rect(hdc, lines[key][0], lines[key][1], win32con.PS_SOLID, lines[key][2], lines[key][3])
-
-            for i, key in enumerate(text):
-                #print(text[key])
-                Overlay.overlay_draw_text(hWnd, hdc, text[key][0], text[key][1], text[key][2], text[key][3])
-
-            for i, key in enumerate(floating_text):
-                #print(text[key])
-                Overlay.overlay_draw_floating_text(hWnd, hdc, floating_text[key][0], floating_text[key][1],
-                                                   floating_text[key][2], floating_text[key][3])
-
-            win32gui.EndPaint(hWnd, paintStruct)
+            hdc, paint_struct = win32gui.BeginPaint(hWnd)
+            self._draw_all(hdc)
+            win32gui.EndPaint(hWnd, paint_struct)
             return 0
-
         elif message == win32con.WM_DESTROY:
-            #print 'Closing the window.'
             win32gui.PostQuitMessage(0)
             return 0
-
         else:
             return win32gui.DefWindowProc(hWnd, message, wParam, lParam)
 
+    def _draw_all(self, hdc):
+        """ Centralise toutes les opérations de dessin. """
+        with self.lock:
+            # Dessiner les rectangles
+            for key, (pt1, pt2, color, thick) in self.lines.items():
+                self._draw_rect(hdc, pt1, pt2, color, thick)
 
+            # Dessiner les textes fixes
+            font_handle = self._create_font_handle(hdc, self.font[0], self.font[1])
+            win32gui.SelectObject(hdc, font_handle)
+            for key, (txt, row, col, color) in self.texts.items():
+                self._draw_text(hdc, txt, row, col, color)
+
+            # Dessiner les textes flottants
+            for key, (txt, x, y, color) in self.floating_texts.items():
+                self._draw_floating_text(hdc, txt, x, y, color)
+            
+            # Important : Supprimer l'objet GDI après utilisation
+            win32gui.DeleteObject(font_handle)
+
+    def _create_font_handle(self, hdc, fontname, size):
+        lf = win32gui.LOGFONT()
+        lf.lfFaceName = fontname
+        lf.lfHeight = int(round(win32ui.GetDeviceCaps(hdc, win32con.LOGPIXELSX) / 60.0 * size))
+        lf.lfQuality = win32con.NONANTIALIASED_QUALITY
+        return win32gui.CreateFontIndirect(lf)
+
+    def _draw_rect(self, hdc, pt1, pt2, color, thick):
+        """ Dessine un rectangle simple avec une gestion correcte des ressources. """
+        pen = win32gui.CreatePen(win32con.PS_SOLID, thick, win32api.RGB(*color))
+        try:
+            win32gui.SelectObject(hdc, pen)
+            # Dessin d'un rectangle simple pour la clarté, la logique complexe peut être réintégrée ici
+            win32gui.MoveToEx(hdc, pt1[0], pt1[1])
+            win32gui.LineTo(hdc, pt2[0], pt1[1])
+            win32gui.LineTo(hdc, pt2[0], pt2[1])
+            win32gui.LineTo(hdc, pt1[0], pt2[1])
+            win32gui.LineTo(hdc, pt1[0], pt1[1])
+        finally:
+            # Assure que le stylo est toujours détruit
+            win32gui.DeleteObject(pen)
+    
+    # Méthodes publiques pour interagir avec l'overlay
+    def add_rect(self, key: str, pt1: tuple[int, int], pt2: tuple[int, int], color: tuple[int, int, int], thickness: int):
+        with self.lock:
+            self.lines[key] = (pt1, pt2, color, thickness)
+
+    def set_font(self, fontname: str, size: int):
+        with self.lock:
+            self.font = (fontname, size)
+    
+    def add_text(self, key: str, text: str, x: int, y: int, color: tuple[int, int, int]):
+        with self.lock:
+            self.floating_texts[key] = (text, x, y, color)
+
+    def remove_item(self, key: str):
+        with self.lock:
+            self.lines.pop(key, None)
+            self.texts.pop(key, None)
+            self.floating_texts.pop(key, None)
+
+    def clear(self):
+        with self.lock:
+            self.lines.clear()
+            self.texts.clear()
+            self.floating_texts.clear()
+
+    def paint(self):
+        """ Demande à la fenêtre de se redessiner. """
+        self._update_target_window()
+        if self.h_window:
+            win32gui.RedrawWindow(self.h_window, None, None, win32con.RDW_INVALIDATE | win32con.RDW_ERASE)
+
+    def quit(self):
+        """ Ferme la fenêtre de l'overlay proprement. """
+        if self.h_window:
+            win32gui.PostMessage(self.h_window, win32con.WM_CLOSE, 0, 0)
+
+# Exemple d'utilisation
 def main():
-    ov = Overlay("",0)
-
-    #       key    x,y       x,y end      color      thinkness
-    rect = {'a': [(50,50), (500, 500), (120, 255, 0),2],
-            'b': [(800,800), (1000, 1000), (20, 10, 255),15] ,
-            'c': [(220,30), (350, 700), (255, 20, 10),1] 
-           }
-
-
-    ov.overlay_setfont("Times New Roman", 12 )
-    ov.overlay_set_pos(2000, 50)
-    #                                        row,col, color   based on fontSize
-    ov.overlay_text('1', "Hello World",       1, 1,(0,0,255) )
-    ov.overlay_text('2', "next test in line", 2, 1,(255,0,255) )
-
-    for i, key in enumerate(rect):
-        ov.overlay_rect(key, rect[key][0], rect[key][1], rect[key][2], rect[key][3])
-        print("Adding")
-        print(rect[key])
-
-    ov.overlay_paint()  
+    print("Démarrage de l'overlay. Il se superposera à la fenêtre 'Elite - Dangerous (CLIENT)' si elle est trouvée.")
+    print("Sinon, il couvrira tout l'écran. L'overlay se fermera après 10 secondes.")
+    
+    ov = Overlay("Elite - Dangerous (CLIENT)")
+    
+    # Ajoute des éléments de manière dynamique
+    ov.set_font("Arial", 16)
+    ov.add_rect('box1', (100, 100), (400, 300), (0, 255, 0), 2)
+    ov.add_text('label1', "Ceci est un test", 110, 110, (255, 255, 255))
+    
+    # Demande à l'overlay de se redessiner
+    ov.paint()
     sleep(5)
-    rect['d'] = [(400,150), (900, 550), (255, 10, 255),25]
-    ov.overlay_rect('d', rect['d'][0], rect['d'][1], rect['d'][2], rect['d'][3])    
-    ov.overlay_text('3', "Changed", 3, 3,(255,0,0) )
-    ov.overlay_setfont("Times New Roman", 16 )
-    ov.overlay_set_pos(1800, 50)
-    ov.overlay_paint() 
 
+    # Modifie les éléments
+    print("Modification des éléments...")
+    ov.add_rect('box1', (150, 150), (450, 350), (255, 0, 0), 4)
+    ov.add_text('label1', "Le texte a changé !", 160, 160, (255, 255, 0))
+    ov.add_text('new_label', "Nouveau texte", 500, 500, (0, 180, 255))
+    ov.paint()
     sleep(5)
-    rect['b'] = [(40,150), (90, 550), (155, 10, 255),10]
-    ov.overlay_rect('b', rect['b'][0], rect['b'][1], rect['b'][2], rect['b'][3])  
-    ov.overlay_text('3', "", 3, 3,(255,0,0) )
-    ov.overlay_paint()   
-    sleep(5)
-    ov.overlay_quit()
-    sleep(2)
+
+    print("Fermeture de l'overlay.")
+    ov.quit()
 
 if __name__ == "__main__":
     main()
-
-
-
-
- 
