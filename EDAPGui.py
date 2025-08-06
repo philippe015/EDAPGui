@@ -4,7 +4,7 @@ from PIL import Image, ImageGrab, ImageTk import tkinter as tk from tkinter impo
 
 from Voice import * from MousePt import MousePoint
 
-from Image_Templates import * from Screen import * from Screen_Regions import * from EDKeys import * from EDJournal import * from ED_AP import * from assistants.fleet_carrier_assistant import FleetCarrierAssistant
+from Image_Templates import * from Screen import * from Screen_Regions import * from EDKeys import * from EDJournal import * from ED_AP import * from assistants.fleet_carrier_assistant import FleetCarrierAssistant from fc_loader import FleetCarrierLoader
 
 from EDlogger import logger
 
@@ -41,6 +41,9 @@ self.gui_loaded = False
         command=lambda field='Fleet Carrier Assist': self.check_cb(field)
     )
     self.lab_ck['Fleet Carrier Assist'].pack()
+
+    # Ajout de l'interface de chargement Fleet Carrier
+    self.fc_loader = FleetCarrierLoader(root, self.ed_ap, self.callback)
 
     self.ed_ap.gui_loaded = True
     self.gui_loaded = True
