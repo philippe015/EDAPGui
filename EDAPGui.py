@@ -1,3 +1,5 @@
+from fc_loader import FleetCarrierLoader
+
 import queue import sys import os import threading import kthread from datetime import datetime from time import sleep import cv2 import json from pathlib import Path import keyboard import webbrowser import requests
 
 from PIL import Image, ImageGrab, ImageTk import tkinter as tk from tkinter import * from tkinter import filedialog as fd from tkinter import messagebox from tkinter import ttk from idlelib.tooltip import Hovertip
