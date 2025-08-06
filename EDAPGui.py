@@ -58,6 +58,14 @@ class APGui:
         self.root.protocol("WM_DELETE_WINDOW", self.close_window)
         self.root.resizable(False, False)
 
+        # Apply a modern theme to ttk widgets.  Attempt to use the 'clam' theme
+        # which provides a clean, modern appearance; fall back silently if unavailable.
+        try:
+            style = ttk.Style(self.root)
+            style.theme_use('clam')
+        except Exception:
+            pass
+
         # Internal flags
         self.gui_loaded = False
         self.log_buffer: queue.Queue[str] = queue.Queue()
@@ -78,7 +86,8 @@ class APGui:
 
         # Add Fleet Carrier Assist checkbox
         self.checkboxvar['Fleet Carrier Assist'] = tk.BooleanVar()
-        self.lab_ck['Fleet Carrier Assist'] = tk.Checkbutton(
+        # Use ttk.Checkbutton for a themed appearance
+        self.lab_ck['Fleet Carrier Assist'] = ttk.Checkbutton(
             root,
             text="Fleet Carrier Assist",
             variable=self.checkboxvar['Fleet Carrier Assist'],
@@ -136,11 +145,13 @@ class APGui:
 
     def gui_gen(self, win: tk.Tk) -> tk.Listbox:
         """Create the base log listbox used to display log messages."""
-        main_frame = tk.Frame(win)
+        # Use ttk.Frame and ttk.Scrollbar for modern themed widgets.  The Listbox
+        # remains a standard Tk widget as ttk does not provide one.
+        main_frame = ttk.Frame(win)
         main_frame.pack(fill=tk.BOTH, expand=True)
         msg_listbox = tk.Listbox(main_frame, width=80, height=20)
         msg_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar = tk.Scrollbar(main_frame, command=msg_listbox.yview)
+        scrollbar = ttk.Scrollbar(main_frame, command=msg_listbox.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         msg_listbox.config(yscrollcommand=scrollbar.set)
         return msg_listbox
